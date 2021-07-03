@@ -1,0 +1,185 @@
+#!/Perl/bin/perl.exe
+
+use strict;
+use warnings;
+
+use LWP;
+use Switch;
+use URI::Escape;
+
+my %HOSTS_DATA;
+
+#----------------------------------#
+# Configuracion general del script #
+#----------------------------------#
+my $URL_BASE = 'http://my-tss.com/nagios/cgi-bin/';
+#my $URL_CONSULTA = 'status.cgi?hostgroup=all&style=detail&servicestatustypes=6&hoststatustypes=15';
+my $URL_CONSULTA = 'status.cgi?hostgroup=all&style=detail&servicestatustypes=248&hoststatustypes=15';
+my $URL_CONSULTA_HOST_DETALLES = 'extinfo.cgi?type=1&host=';
+#----------------------------------#
+
+#----------------------------------------------#
+# Configuracion del sistema de registros (LOGS)#
+#----------------------------------------------#
+my $CONFIG_TYPE_LOG="screen";
+my $CONFIG_LOGFILE="logs.txt";
+#----------------------------------------------#
+Main();
+#Funcion principal del script.
+sub Main
+{
+	my $ua = LWP::UserAgent->new;
+	my $req = HTTP::Request->new(GET=>$URL_BASE.$URL_CONSULTA);
+	$req->authorization_basic('nagiosadmin','muah');
+	
+	my $main_page = uri_unescape(($ua->request($req))->as_string);	
+	
+	my $HOST="";
+	my $SERVICE="";
+	my $IP="";
+	while ( $main_page =~ m/extinfo\.cgi\?type=2&host=([-A-Z0-9+&@\/%=~_|!:,.;]*)&service=([-A-Z0-9+&@\/%=~_|!:,.;]*)/ig ) {	
+		if( $1 ne $HOST )
+		{
+			$HOST = $1;	
+			#Consulta detalles del HOST
+			my $req = HTTP::Request->new(GET=> $URL_BASE.$URL_CONSULTA_HOST_DETALLES . $HOST);
+			$req->authorization_basic('nagiosadmin','muah');
+			my $host_detalles = uri_unescape(($ua->request($req))->as_string);
+			
+			#Busca IP de HOST
+			if ( $host_detalles =~ m!<DIV CLASS='data'>((?:[0-9]{1,3}\.){3}[0-9]{1,3})</DIV>!i ) {
+				$IP = $1;
+			} else {
+				#IP indefinida
+				$IP = "NULL";
+			}
+		} else {
+			#Si se trata de un servicio ya procesado, se omite.
+			if( $2 eq $SERVICE )
+			{
+				next;
+			}
+		}	
+		$SERVICE = $2;
+		AgregarServicio($IP,$SERVICE);
+	}
+	DespacharServicios();
+}
+
+#Devuelve la hora y fecha actual
+#del sistema.
+sub TiempoLocal
+{
+	my @months = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+	my @weekDays = qw(Sun Mon Tue Wed Thu Fri Sat Sun);
+	my ($second, $minute, $hour, $dayOfMonth, $month, $yearOffset, $dayOfWeek, $dayOfYear, $daylightSavings) = localtime();
+	my $year = 1900 + $yearOffset;
+	my $theTime = "$hour:$minute:$second, $weekDays[$dayOfWeek] $months[$month] $dayOfMonth, $year";
+	return $theTime;
+}
+
+#-----------------------------#
+# SISTEMA DE REGISTROS (LOGs) #
+#-----------------------------#
+
+#Ingresa un registro al LOG
+#Acepta 1 parametros:
+# 1.Descripcion del registro (Texto),
+sub IngresarLog
+{
+	my $TEXTO_LOG=$_[0];
+	my @CONFIG_TYPE_LOG = split(",",$CONFIG_TYPE_LOG);
+	foreach my $type_config(@CONFIG_TYPE_LOG)
+	{
+		switch($type_config)
+		{
+			case 'disable'
+			{
+				
+			}
+			case 'file' {
+				open(DATA,">>".$CONFIG_LOGFILE)
+					|| warn "Error al crear el archivo $CONFIG_LOGFILE.\n";
+				print DATA TiempoLocal().' -> '.$TEXTO_LOG."\n";
+				close(DATA);
+			}
+			case 'screen' {
+				print TiempoLocal().' -> '.$TEXTO_LOG."\n";
+			}
+		}
+	}
+}
+
+#----------------------------#
+# ADMINISTRADOR DE SERVICIOS #
+#----------------------------#
+
+#Agrega un Servicio a la estructura HOSTS_DATA
+#Acepta 2 parametros:
+#	1.El IP del HOST , 2.El nombre del Servicio.
+sub AgregarServicio
+{
+	my $HOST_IP=$_[0];
+	my $SERVICE_NAME=$_[1];
+	unless(exists $HOSTS_DATA{$HOST_IP})
+	{
+		$HOSTS_DATA{$HOST_IP}=[$SERVICE_NAME];
+	}
+	else
+	{
+		push( @{$HOSTS_DATA{$HOST_IP}}, $SERVICE_NAME);
+	}
+		IngresarLog("Servicio caido. HOST: $HOST_IP, SERVICE: $SERVICE_NAME\n");
+	
+}
+
+#Se encarga de procesar la estructura HOSTS_DATA
+#Ejecutando los script adecuados segun los Servicios
+#presentes en dicha estructura.
+sub DespacharServicios
+{
+	my $HOST_IP;
+	my $SERVICE_NAME;
+	
+	foreach $HOST_IP(keys %HOSTS_DATA)
+	{
+			foreach $SERVICE_NAME(@{$HOSTS_DATA{$HOST_IP}})
+			{
+				switch($SERVICE_NAME)
+				{
+					case "web" {
+						print "$HOST_IP - Despacho del servicio WEB\n";
+					}
+					case "dns" {
+						print "$HOST_IP - Despacho del servicio DNS\n";
+					}
+					case "ftp" {
+						print "$HOST_IP - Despacho del servicio FTP\n";
+					}
+					case "mail" {
+						print "$HOST_IP - Despacho del servicio MAIL\n";
+					}
+					else {
+						print "$HOST_IP - Servicio desconocido: ".$SERVICE_NAME. "\n";
+					}
+				}
+			}		
+	}
+}
+
+#Despliega por pantalla la informacion
+#contenida en la estructura HOSTS_DATA
+#de forma legible.
+sub DesplegarServicios
+{
+	my $HOST_IP;
+	my $SERVICE_NAME;
+	
+	foreach $HOST_IP(keys %HOSTS_DATA)
+	{
+
+			print "-> ".$HOST_IP.": "."\n";
+			foreach $SERVICE_NAME(@{$HOSTS_DATA{$HOST_IP}})
+			{
+				print "       |--> ".$SERVICE_NAME."\n";	
+			}
